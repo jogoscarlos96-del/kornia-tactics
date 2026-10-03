@@ -15,11 +15,16 @@
 
   let host: HTMLDivElement;
   let renderer: PixiBattlefieldRenderer | undefined;
+  let receivedBattle = battle;
   let currentBattle = battle;
   let selectedUnitId: UnitId | undefined;
   let hoveredCell: GridPoint | undefined;
   let lastMessage = 'Select a unit to inspect its movement range.';
 
+  $: if (battle !== receivedBattle) {
+    receivedBattle = battle;
+    currentBattle = battle;
+  }
   $: selectedUnit = currentBattle.units.find((unit) => unit.id === selectedUnitId);
   $: reachableCells = selectedUnitId ? reachableCellsForUnit(currentBattle, selectedUnitId) : [];
   $: previewResult = selectedUnitId && hoveredCell
