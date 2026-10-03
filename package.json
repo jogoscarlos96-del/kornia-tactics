@@ -9,7 +9,8 @@
     "preview": "vite preview",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
     "test": "vitest run",
-    "test:phase1": "vitest run src/lib/core/verticalSlice.test.ts"
+    "test:phase1": "vitest run src/lib/core/verticalSlice.test.ts",
+    "test:phase4": "vitest run src/lib/core/combat.test.ts src/lib/core/verticalSlice.test.ts"
   },
   "dependencies": {
     "pixi.js": "^8.22.0"
