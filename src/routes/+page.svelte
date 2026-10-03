@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
   import Battlefield from '$lib/components/Battlefield.svelte';
   import {
     activeUnitId,
@@ -12,10 +13,25 @@
     type MoveActionFailureReason,
     type UnitId
   } from '$lib/core';
+  import {
+    BattleVersionConflictError,
+    clearBattleHandle,
+    createLiveBattlePersistenceGateway,
+    loadBattleHandle,
+    readLivePersistenceConfiguration,
+    saveBattleHandle,
+    type BattlePersistenceGateway,
+    type BattlePersistenceHandle
+  } from '$lib/persistence';
 
   let combat: CombatState = phase4VerticalSliceCombat;
   let targetId: UnitId | undefined = 'pokemon-pecrow-a';
   let combatMessage = 'Move into range, choose a target, then use a move.';
+  let persistence: BattlePersistenceGateway | undefined;
+  let persistenceHandle: BattlePersistenceHandle | undefined;
+  let persistenceBusy = false;
+  let persistenceMessage = 'Persistence is initializing.';
+  let savedAt: string | undefined;
 
   $: activeId = activeUnitId(combat);
   $: active = combatUnit(combat, activeId);
@@ -27,6 +43,23 @@
   $: if (enemyTargets.length > 0 && !enemyTargets.some((target) => target.unitId === targetId)) {
     targetId = enemyTargets[0].unitId;
   }
+
+  onMount(() => {
+    const configuration = readLivePersistenceConfiguration();
+    if (!configuration) {
+      persistenceMessage = 'Persistence unavailable: configure PUBLIC_SUPABASE_URL and PUBLIC_SUPABASE_KEY.';
+      return;
+    }
+
+    persistence = createLiveBattlePersistenceGateway(configuration);
+    const storedHandle = loadBattleHandle(window.localStorage);
+    if (!storedHandle) {
+      persistenceMessage = 'Ready to create a persistent battle save.';
+      return;
+    }
+
+    void restoreSavedBattle(storedHandle, true);
+  });
 
   function handleBattleChange(battle: BattleView) {
     combat = updateBattleView(combat, battle);
@@ -55,6 +88,70 @@
     combatMessage = `${unitName(activeUnitId(combat))}'s turn.`;
   }
 
+  async function saveBattle() {
+    if (!persistence) {
+      persistenceMessage = 'Persistence is not configured for this deployment.';
+      return;
+    }
+
+    persistenceBusy = true;
+    try {
+      const nextHandle = persistenceHandle
+        ? await persistence.commitBattle(persistenceHandle, combat)
+        : await persistence.createBattle(combat.battle.name, combat);
+      persistenceHandle = nextHandle;
+      saveBattleHandle(window.localStorage, nextHandle);
+      savedAt = new Date().toISOString();
+      persistenceMessage = `Saved battle version ${nextHandle.version} · ${nextHandle.latestEventSequence} combat event${nextHandle.latestEventSequence === 1 ? '' : 's'}.`;
+    } catch (error) {
+      persistenceMessage = persistenceFailureMessage(error);
+    } finally {
+      persistenceBusy = false;
+    }
+  }
+
+  async function reloadSavedBattle() {
+    if (!persistenceHandle) {
+      persistenceMessage = 'No local saved-battle capability is available to reload.';
+      return;
+    }
+    await restoreSavedBattle(persistenceHandle, false);
+  }
+
+  async function restoreSavedBattle(handle: BattlePersistenceHandle, automatic: boolean) {
+    if (!persistence) return;
+
+    persistenceBusy = true;
+    persistenceMessage = automatic ? 'Restoring the last saved battle…' : 'Reloading the authoritative saved battle…';
+    try {
+      const saved = await persistence.loadBattle(handle.readKey);
+      if (!saved) {
+        clearBattleHandle(window.localStorage);
+        persistenceHandle = undefined;
+        savedAt = undefined;
+        persistenceMessage = 'The saved battle no longer exists. A new save can be created.';
+        return;
+      }
+
+      combat = saved.state;
+      persistenceHandle = Object.freeze({
+        id: saved.id,
+        readKey: handle.readKey,
+        writeKey: handle.writeKey,
+        version: saved.version,
+        latestEventSequence: saved.latestEventSequence
+      });
+      saveBattleHandle(window.localStorage, persistenceHandle);
+      savedAt = saved.savedAt;
+      persistenceMessage = `Restored battle version ${saved.version} from Supabase.`;
+      combatMessage = `${unitName(activeUnitId(combat))}'s turn · restored from the saved snapshot.`;
+    } catch (error) {
+      persistenceMessage = persistenceFailureMessage(error);
+    } finally {
+      persistenceBusy = false;
+    }
+  }
+
   function unitName(unitId: UnitId): string {
     return combat.battle.units.find((unit) => unit.id === unitId)?.name ?? unitId;
   }
@@ -67,6 +164,19 @@
     if (reason === 'not-active-turn') return 'Only the active unit can act.';
     return `The move cannot be used (${reason}).`;
   }
+
+  function persistenceFailureMessage(error: unknown): string {
+    if (error instanceof BattleVersionConflictError) {
+      return 'Save conflict: the persisted battle changed elsewhere. Reload the saved battle before trying again.';
+    }
+    if (error instanceof Error) return `Persistence error: ${error.message}`;
+    return 'Persistence error: the battle could not be saved or restored.';
+  }
+
+  function formatSavedAt(value: string): string {
+    const date = new Date(value);
+    return Number.isNaN(date.valueOf()) ? value : date.toLocaleString();
+  }
 </script>
 
 <svelte:head>
@@ -77,9 +187,9 @@
 <div class="shell">
   <header class="topbar">
     <div>
-      <p class="eyebrow">Kornia Tactics · Phase 4</p>
+      <p class="eyebrow">Kornia Tactics · Phase 5</p>
       <h1>{combat.battle.name}</h1>
-      <p class="lede">Local combat prototype with turn validation, automated rolls, STAB, type damage, HP and PP.</p>
+      <p class="lede">Persistent combat prototype with versioned snapshots, append-only battle events and reloadable HP, PP, turns and positions.</p>
     </div>
     <div class="badge">Round {combat.turn.round}</div>
   </header>
@@ -90,6 +200,24 @@
     </section>
 
     <aside class="sidebar">
+      <section class="card persistence-card">
+        <p class="card-label">Persistence</p>
+        <h2>{persistenceHandle ? `Saved v${persistenceHandle.version}` : 'Unsaved battle'}</h2>
+        <p>{persistenceMessage}</p>
+        {#if savedAt}
+          <small>Last server snapshot: {formatSavedAt(savedAt)}</small>
+        {/if}
+        <div class="persistence-actions">
+          <button type="button" on:click={saveBattle} disabled={!persistence || persistenceBusy}>
+            {persistenceBusy ? 'Working…' : persistenceHandle ? 'Save battle' : 'Create save'}
+          </button>
+          {#if persistenceHandle}
+            <button type="button" on:click={reloadSavedBattle} disabled={persistenceBusy}>Reload saved</button>
+          {/if}
+        </div>
+        <small class="safety-note">The current vertical slice is Tactics-owned. Campaign Pokémon HP/PP are unchanged unless an owned Pokémon is explicitly bound later.</small>
+      </section>
+
       <section class="card active-card">
         <p class="card-label">Active turn</p>
         <h2>{unitName(activeId)}</h2>
@@ -149,8 +277,8 @@
       </section>
 
       <section class="card muted">
-        <p class="card-label">Phase 4 scope</p>
-        <p>Pound, Fairy Wind and Peck are automated. Advanced move effects, reactions, abilities and persistent saves remain later-phase work.</p>
+        <p class="card-label">Phase 5 scope</p>
+        <p>Save and reload the full local battle through Supabase. Events are append-only, snapshots are versioned, and concurrent stale saves are rejected. Multiplayer authority remains Phase 6.</p>
       </section>
     </aside>
   </main>
@@ -177,18 +305,23 @@
   .sidebar { display: grid; gap: 12px; }
   .card { padding: 18px; border-radius: 16px; background: #151d17; border: 1px solid rgba(214, 229, 217, 0.12); }
   .active-card { border-color: rgba(244, 233, 138, 0.26); }
+  .persistence-card { border-color: rgba(127, 187, 245, 0.24); }
   .card h2 { margin: 6px 0; font-size: 1.15rem; }
   .card p { color: #a9b7ac; line-height: 1.45; }
   .card.muted { background: #111713; }
   label { display: grid; gap: 5px; margin: 14px 0; color: #b7c9ba; font-size: 0.8rem; }
   select { width: 100%; padding: 9px 10px; border-radius: 9px; border: 1px solid rgba(214, 229, 217, 0.18); background: #0f1511; color: #edf2ed; }
   .moves { display: grid; gap: 8px; }
-  .moves button, .end-turn { width: 100%; border: 1px solid rgba(214, 229, 217, 0.15); border-radius: 10px; padding: 10px 11px; background: #202b22; color: #edf2ed; text-align: left; cursor: pointer; }
+  .moves button, .end-turn, .persistence-actions button { width: 100%; border: 1px solid rgba(214, 229, 217, 0.15); border-radius: 10px; padding: 10px 11px; background: #202b22; color: #edf2ed; text-align: left; cursor: pointer; }
   .moves button { display: grid; gap: 3px; }
-  .moves button:disabled { cursor: not-allowed; opacity: 0.45; }
+  .moves button:disabled, .persistence-actions button:disabled { cursor: not-allowed; opacity: 0.45; }
   .moves small { color: #9eafa2; }
   .end-turn { margin-top: 10px; text-align: center; background: #2b342b; }
   .message { margin: 12px 0 0 !important; font-size: 0.86rem; }
+  .persistence-actions { margin-top: 12px; display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .persistence-actions button { text-align: center; }
+  .persistence-actions button:first-child { background: #20302a; }
+  .safety-note { display: block; margin-top: 10px; line-height: 1.4; }
   .units { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 7px; }
   .units li { display: flex; justify-content: space-between; gap: 12px; }
   .units .fainted { opacity: 0.45; text-decoration: line-through; }

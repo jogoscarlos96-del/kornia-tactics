@@ -89,10 +89,38 @@ Phase 4 adds a renderer-independent local combat state on top of the battlefield
 
 The Phase 4 battle-start snapshot uses Tactics-owned instances: level-2 Terratink with Pound and Fairy Wind, and two level-1 Pecrow with Peck. Canonical species/move definitions were verified against Kornia, but no Trainer or owned-Pokémon record is imported or synchronized.
 
-Advanced secondary move effects, reactions, ability automation, status effects, concentration, switching, persistent battle storage and canonical HP/PP write-back remain outside Phase 4.
+Advanced secondary move effects, reactions, ability automation, status effects, concentration and switching remain outside Phase 4.
+
+## Phase 5 persistence contract
+
+Phase 5 adds persistent battle storage in the existing Kornia Supabase project without exposing Tactics tables directly through the Data API.
+
+- Persistence lives in an isolated non-public `tactics` schema.
+- `tactics.battles` stores stable battle identity, separate read/write capability keys, lifecycle status, optimistic version and latest event sequence.
+- `tactics.battle_units` stores immutable battle-start unit snapshots and optional explicit bindings to canonical owned Pokémon.
+- `tactics.battle_events` is append-only by contract. Existing event sequence numbers and payloads cannot be removed or rewritten by a later save.
+- `tactics.battle_snapshots` stores the complete authoritative battle state for every saved version.
+- All four tables have RLS enabled and no direct `anon`/`authenticated` table grants or policies. Browser access is only through narrowly granted RPC functions.
+- `tactics_create_battle` creates version 1, unit snapshots, any existing event history and the first full-state snapshot in one transaction.
+- `tactics_get_battle` accepts only the read capability and never returns the write capability.
+- `tactics_commit_battle` requires the write capability plus the caller's expected version, row-locks the battle, rejects stale versions, preserves the unit set, appends only new immutable events and writes the next snapshot atomically.
+- A browser stores only its battle capability handle locally. Reload uses the read key and preserves the local write key; the database remains the authoritative saved version.
+- The UI supports explicit Save and Reload. A browser refresh automatically restores a locally linked saved battle.
+- Movement-only changes are preserved because each commit stores a full snapshot even when no new combat event was appended.
+- Stale concurrent saves fail with a version conflict rather than overwriting newer battle state.
+
+### Optional canonical HP/PP binding
+
+Generated Tactics units never write to campaign Pokémon.
+
+An owned Pokémon may be explicitly bound to a battle unit only through `tactics_bind_owned_pokemon`, which requires both the battle write capability and the existing Trainer write key. The function verifies ownership and exact species identity, records canonical move-row bindings, and never stores the Trainer write key.
+
+Once a unit is explicitly bound, `tactics_commit_battle` updates that Pokémon's canonical `hp_cur` and mapped move `pp_cur` inside the same database transaction as the battle event/snapshot commit. Any failure rolls the entire save back. The current Terratink/Pecrow vertical slice is intentionally unbound, so Phase 5 verification cannot alter campaign HP/PP.
+
+Phase 5 does not yet make the database the live action-resolution authority and does not provide multi-client turn ownership or realtime synchronization. Those are Phase 6 concerns.
 
 ## Vertical slice
 
-The local prototype contains a 20×20 forest battlefield, Tactics-created Nico and Terratink, two Tactics-created Pecrow, PLAYER/DM control, sample terrain, unit selection, reachable-cell highlighting, shortest-path preview, local movement commit and turn-gated local combat.
+The prototype contains a 20×20 forest battlefield, Tactics-created Nico and Terratink, two Tactics-created Pecrow, PLAYER/DM control, sample terrain, unit selection, reachable-cell highlighting, shortest-path preview, movement, turn-gated local combat and persistent save/reload.
 
-Terratink and Pecrow can move into range, target an opposing combatant, use the selected Phase 4 moves, consume PP, roll attacks automatically, apply STAB/type damage, lose HP, faint at 0 HP, produce battle-log events and advance turns. Persistence remains Phase 5 work.
+Terratink and Pecrow can move into range, target an opposing combatant, use the selected Phase 4 moves, consume PP, roll attacks automatically, apply STAB/type damage, lose HP, faint at 0 HP, produce ordered battle-log events, advance turns, save the complete state to Supabase and restore positions/HP/PP/turn/event history after reload. Multiplayer authority remains Phase 6 work.
