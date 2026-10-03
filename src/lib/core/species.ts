@@ -1,4 +1,4 @@
-import type { SpeciesReference } from './model.ts';
+import type { SpeciesReference } from './model';
 
 export const FAKEMON_PREFIX = 'F.';
 

@@ -1,5 +1,5 @@
-import type { BattleView, TacticsUnit } from './model.ts';
-import { resolveSpeciesReference } from './species.ts';
+import type { BattleView, TacticsUnit } from './model';
+import { resolveSpeciesReference } from './species';
 
 const units: readonly TacticsUnit[] = Object.freeze([
   Object.freeze({

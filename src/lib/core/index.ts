@@ -1,3 +1,3 @@
-export * from './model.ts';
-export * from './species.ts';
-export * from './verticalSlice.ts';
+export * from './model';
+export * from './species';
+export * from './verticalSlice';
