@@ -2,11 +2,11 @@
 
 Tactical battle companion for the Kornia Poke5e campaign.
 
-## Phase 1
+## Phase 2
 
-This repository currently establishes the application shell and the architectural split between renderer-independent battle data and PixiJS rendering.
+This repository now includes the application shell plus renderer-independent terrain, movement and deterministic pathfinding rules consumed by the PixiJS battlefield.
 
-The prototype renders a 20×20 local battlefield containing Nico, Terratink and two DM-controlled Pecrow. It intentionally does not implement movement or combat yet.
+The prototype renders a 20×20 local battlefield containing Nico, Terratink and two DM-controlled Pecrow. Units can be selected, their reachable cells highlighted, paths previewed, and valid local movement committed. Combat, turns and persistence remain deferred.
 
 ## Stack
 
@@ -22,10 +22,14 @@ pnpm install
 pnpm dev
 ```
 
-Core-only sanity check, which does not require Svelte or PixiJS at runtime:
+Phase 1 regression test:
 
 ```bash
 pnpm test:phase1
 ```
 
-See `docs/architecture.md` for the Phase 1 boundaries.
+See `docs/architecture.md` for the current architecture boundaries.
+
+## Continuous integration
+
+GitHub Actions installs dependencies and runs Svelte/type checks, unit tests, the Phase 1 regression test and a production build on every push to `main` and on pull requests.
