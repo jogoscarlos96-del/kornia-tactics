@@ -9,9 +9,14 @@ describe('vertical slice', () => {
     expect(new Set(verticalSliceBattle.units.map((unit) => unit.id)).size).toBe(4);
   });
 
-  it('keeps species resolution explicit', () => {
-    expect(resolveSpeciesReference('F.TERRATINK').kind).toBe('fakemon');
+  it('keeps species resolution explicit and uses the live Fakémon read keys', () => {
+    expect(resolveSpeciesReference('F.JDGKP5JUV2ZED').kind).toBe('fakemon');
     expect(resolveSpeciesReference('pikachu').kind).toBe('official');
+    expect(verticalSliceBattle.units.find((unit) => unit.id === 'pokemon-terratink')?.species?.id).toBe('F.JDGKP5JUV2ZED');
+    expect(verticalSliceBattle.units.filter((unit) => unit.name.startsWith('Pecrow')).map((unit) => unit.species?.id)).toEqual([
+      'F.AR8BAA55WE625',
+      'F.AR8BAA55WE625'
+    ]);
   });
 
   it('contains terrain and movement profiles for Phase 2', () => {
