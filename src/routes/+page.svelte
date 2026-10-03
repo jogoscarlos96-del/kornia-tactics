@@ -14,9 +14,9 @@
 <div class="shell">
   <header class="topbar">
     <div>
-      <p class="eyebrow">Kornia Tactics · Phase 1</p>
+      <p class="eyebrow">Kornia Tactics · Phase 2</p>
       <h1>{verticalSliceBattle.name}</h1>
-      <p class="lede">Local battlefield shell. Rules remain independent from the renderer.</p>
+      <p class="lede">Interactive movement prototype. Rules and pathfinding remain independent from the renderer.</p>
     </div>
     <div class="badge">20 × 20</div>
   </header>
@@ -46,8 +46,8 @@
       </section>
 
       <section class="card muted">
-        <p class="card-label">Phase 1 scope</p>
-        <p>Rendering only. Selection, pathfinding, turns and combat arrive in later milestones.</p>
+        <p class="card-label">Phase 2 scope</p>
+        <p>Select any unit, preview reachable squares and paths, then click a destination to move. Turns and combat remain deferred.</p>
       </section>
     </aside>
   </main>
