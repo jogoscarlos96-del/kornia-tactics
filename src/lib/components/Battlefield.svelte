@@ -11,6 +11,7 @@
   import { PixiBattlefieldRenderer } from '$lib/rendering/PixiBattlefieldRenderer';
 
   export let battle: BattleView;
+  export let onBattleChange: ((battle: BattleView) => void) | undefined = undefined;
 
   let host: HTMLDivElement;
   let renderer: PixiBattlefieldRenderer | undefined;
@@ -65,6 +66,7 @@
     }
 
     currentBattle = result.battle;
+    onBattleChange?.(currentBattle);
     hoveredCell = undefined;
     const unit = currentBattle.units.find((candidate) => candidate.id === selectedUnitId);
     lastMessage = `${unit?.name ?? 'Unit'} moved ${result.path.cost} square${result.path.cost === 1 ? '' : 's'}.`;

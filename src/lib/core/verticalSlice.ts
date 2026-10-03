@@ -48,7 +48,7 @@ const units: readonly TacticsUnit[] = Object.freeze([
     controller: 'DM',
     position: Object.freeze({ x: 14, y: 8 }),
     movement: Object.freeze({ speed: 6, capabilities: Object.freeze(['walk', 'fly'] as const) }),
-    species: resolveSpeciesReference('F.AR8BAA55WE625')
+    species: resolveSpeciesReference('F.HHZWUF7HMTEQS')
   }),
   Object.freeze({
     id: 'pokemon-pecrow-b',
@@ -58,12 +58,12 @@ const units: readonly TacticsUnit[] = Object.freeze([
     controller: 'DM',
     position: Object.freeze({ x: 14, y: 12 }),
     movement: Object.freeze({ speed: 6, capabilities: Object.freeze(['walk', 'fly'] as const) }),
-    species: resolveSpeciesReference('F.AR8BAA55WE625')
+    species: resolveSpeciesReference('F.HHZWUF7HMTEQS')
   })
 ]);
 
 export const verticalSliceBattle: BattleView = Object.freeze({
-  id: 'phase-3-vertical-slice',
+  id: 'phase-4-vertical-slice',
   name: 'Vignola Woods Prototype',
   map: Object.freeze({
     id: 'vignola-woods-prototype',

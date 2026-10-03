@@ -1,3 +1,5 @@
+export * from './combat';
+export * from './combatVerticalSlice';
 export * from './grid';
 export * from './model';
 export * from './movement';
