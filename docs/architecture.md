@@ -23,7 +23,7 @@ Identifiers beginning with `F.` resolve as Fakémon; the suffix is the canonical
 
 Custom moves use `custom:<uuid>`. Other move identifiers resolve through official move data.
 
-The Phase 3 vertical slice uses the live Kornia identifiers `F.JDGKP5JUV2ZED` for Terratink and `F.AR8BAA55WE625` for Pecrow.
+The current vertical slice uses the live Kornia identifiers `F.JDGKP5JUV2ZED` for Terratink and `F.HHZWUF7HMTEQS` for Pecrow. These identifiers are regression-tested because read keys are canonical references and must not silently drift.
 
 ## Phase 3 shared-content adapter
 
@@ -38,7 +38,7 @@ The Phase 3 vertical slice uses the live Kornia identifiers `F.JDGKP5JUV2ZED` fo
 - Phase 3 performs no Supabase writes and creates no schema or migration.
 - Live configuration uses `PUBLIC_SUPABASE_URL` and `PUBLIC_SUPABASE_KEY`, matching the existing Kornia application convention.
 
-The adapter exposes normalized DTOs while preserving the original source payload in `raw`, allowing later combat adapters to add Poke5e-specific fields without coupling the core engine to storage shapes.
+The adapter exposes normalized DTOs while preserving the original source payload in `raw`, allowing combat adapters to add Poke5e-specific fields without coupling the core engine to storage shapes.
 
 ## Core/rendering rule
 
@@ -67,8 +67,32 @@ Movement is deterministic and terrain-aware:
 
 This conservative occupancy rule can later be expanded for ally pass-through, size categories and opportunity-attack rules without changing the renderer contract.
 
+## Phase 4 combat contract
+
+Phase 4 adds a renderer-independent local combat state on top of the battlefield view.
+
+- Combat actions are submitted as intents containing actor, target, move and optional Move Power choice.
+- The resolver validates active turn, remaining action, faint state, enemy targeting, known move, PP, Move Power and range before rolling.
+- Attack bonus is `Move Power modifier + proficiency bonus`.
+- Save DC is `8 + Move Power modifier + proficiency bonus` and saving-throw proficiency is supported.
+- Proficiency follows the Poke5e/D&D progression `2 + floor((level - 1) / 4)`.
+- Damage uses the move's level-banded damage dice. `MOVE` means the selected Move Power modifier.
+- STAB adds the attacking Pokémon's proficiency bonus once when move type matches one of the user's types.
+- Natural 1 attack rolls miss; natural 20 attack rolls hit and double damage dice only.
+- Range uses five-foot grid squares. `melee` is one square; numeric foot ranges are converted to grid distance.
+- Type effectiveness mirrors the current Kornia `poke5e` tier behavior: immunity deals 0; resistance subtracts defender proficiency; double resistance subtracts twice defender proficiency; weakness multiplies by 1.5; double weakness multiplies by 2; final non-immune damage has a minimum of 1.
+- Dual-type matchups use the standard type multiplier only to choose the current Kornia effectiveness tier.
+- A valid move spends one PP and the active unit's action even on a miss. Invalid actions spend nothing.
+- HP cannot fall below 0.
+- Combat resolution returns a new immutable state and appends an ordered local combat event rather than mutating the input.
+- End Turn advances to the next non-fainted combatant and resets action availability.
+
+The Phase 4 battle-start snapshot uses Tactics-owned instances: level-2 Terratink with Pound and Fairy Wind, and two level-1 Pecrow with Peck. Canonical species/move definitions were verified against Kornia, but no Trainer or owned-Pokémon record is imported or synchronized.
+
+Advanced secondary move effects, reactions, ability automation, status effects, concentration, switching, persistent battle storage and canonical HP/PP write-back remain outside Phase 4.
+
 ## Vertical slice
 
-The local prototype contains a 20×20 forest battlefield, Tactics-created Nico and Terratink, two Tactics-created Pecrow, PLAYER/DM control, sample terrain, unit selection, reachable-cell highlighting, shortest-path preview and local movement commit.
+The local prototype contains a 20×20 forest battlefield, Tactics-created Nico and Terratink, two Tactics-created Pecrow, PLAYER/DM control, sample terrain, unit selection, reachable-cell highlighting, shortest-path preview, local movement commit and turn-gated local combat.
 
-Initiative, action economy, combat validation, dice, damage, PP and persistence remain deferred to later phases.
+Terratink and Pecrow can move into range, target an opposing combatant, use the selected Phase 4 moves, consume PP, roll attacks automatically, apply STAB/type damage, lose HP, faint at 0 HP, produce battle-log events and advance turns. Persistence remains Phase 5 work.
