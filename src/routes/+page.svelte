@@ -37,6 +37,7 @@
   let persistenceBusy = false;
   let persistenceMessage = 'Persistence is initializing.';
   let savedAt: string | undefined;
+  let showInitiativeReveal = false;
 
   $: activeId = activeUnitId(combat);
   $: active = combatUnit(combat, activeId);
@@ -62,12 +63,17 @@
       return;
     }
 
-    combat = startBattleWithInitiative(phase4VerticalSliceCombat);
-    combatMessage = `${unitName(activeUnitId(combat))} won initiative and acts first.`;
+    rollFreshInitiative();
     persistenceMessage = configuration
       ? 'Ready to create a persistent battle save.'
       : 'Persistence unavailable: configure PUBLIC_SUPABASE_URL and PUBLIC_SUPABASE_KEY.';
   });
+
+  function rollFreshInitiative() {
+    combat = startBattleWithInitiative(phase4VerticalSliceCombat);
+    showInitiativeReveal = true;
+    combatMessage = `${unitName(activeUnitId(combat))} won initiative and acts first.`;
+  }
 
   function requestMove(unitId: UnitId, destination: GridPoint): TacticalMovementResult {
     const result = moveActiveUnit(combat, unitId, destination);
@@ -159,13 +165,13 @@
         clearBattleHandle(window.localStorage);
         persistenceHandle = undefined;
         savedAt = undefined;
-        combat = startBattleWithInitiative(phase4VerticalSliceCombat);
-        combatMessage = `${unitName(activeUnitId(combat))} won initiative and acts first.`;
+        rollFreshInitiative();
         persistenceMessage = 'The saved battle no longer exists. A new save can be created.';
         return;
       }
 
       combat = normalizeTacticalCombatState(saved.state);
+      showInitiativeReveal = false;
       persistenceHandle = Object.freeze({
         id: saved.id,
         readKey: handle.readKey,
@@ -192,6 +198,10 @@
     if (entry.naturalRoll == null || entry.total == null) return 'Existing saved turn order';
     const modifier = entry.modifier >= 0 ? `+${entry.modifier}` : String(entry.modifier);
     return `d20 ${entry.naturalRoll} ${modifier} = ${entry.total}`;
+  }
+
+  function initiativeModifierText(entry: InitiativeEntry): string {
+    return entry.modifier >= 0 ? `+${entry.modifier}` : String(entry.modifier);
   }
 
   function failureMessage(reason: MoveActionFailureReason): string {
@@ -234,6 +244,42 @@
 
   <main class="workspace">
     <section class="board-panel" aria-label="Battlefield">
+      {#if showInitiativeReveal}
+        <section class="initiative-reveal" aria-live="polite" aria-label="Initiative rolls">
+          <div class="initiative-reveal-heading">
+            <div>
+              <p class="card-label">Battle start</p>
+              <h2>Initiative Rolled</h2>
+              <p>Each combatant rolls d20 + DEX modifier. Highest total acts first.</p>
+            </div>
+            <strong class="initiative-winner">{unitName(activeId)} goes first</strong>
+          </div>
+
+          <ol class="initiative-rolls">
+            {#each combat.turn.initiative as entry, index}
+              <li class:first-place={index === 0}>
+                <span class="initiative-place">#{index + 1}</span>
+                <strong>{unitName(entry.unitId)}</strong>
+                {#if entry.naturalRoll != null && entry.total != null}
+                  <span class="initiative-calculation">
+                    <b class="die-roll">{entry.naturalRoll}</b>
+                    <span>DEX {initiativeModifierText(entry)}</span>
+                    <span>=</span>
+                    <b class="initiative-total">{entry.total}</b>
+                  </span>
+                {:else}
+                  <span class="initiative-calculation">Existing saved turn order</span>
+                {/if}
+              </li>
+            {/each}
+          </ol>
+
+          <button class="begin-battle" type="button" on:click={() => showInitiativeReveal = false}>
+            Begin battle
+          </button>
+        </section>
+      {/if}
+
       <Battlefield
         battle={combat.battle}
         activeUnitId={activeId}
@@ -348,7 +394,7 @@
 
       <section class="card muted">
         <p class="card-label">Playtest scope</p>
-        <p>Initiative now determines turn order. Each unit may commit movement once per turn; movement can be undone before resolving the turn action. Combat calculations are otherwise unchanged.</p>
+        <p>Initiative rolls are shown prominently when a fresh battle begins and remain visible in the Initiative panel. Each unit may commit movement once per turn; movement can be undone before resolving the turn action. Combat calculations are otherwise unchanged.</p>
       </section>
     </aside>
   </main>
@@ -371,7 +417,7 @@
   .lede { margin: 0; color: #9eb0a2; }
   .badge { border: 1px solid rgba(244, 233, 138, 0.32); border-radius: 999px; padding: 10px 14px; color: #efe8a5; white-space: nowrap; }
   .workspace { max-width: 1380px; margin: 0 auto; display: grid; grid-template-columns: minmax(0, 1fr) 350px; gap: 18px; align-items: start; }
-  .board-panel { min-width: 0; }
+  .board-panel { min-width: 0; display: grid; gap: 12px; }
   .sidebar { display: grid; gap: 12px; }
   .card { padding: 18px; border-radius: 16px; background: #151d17; border: 1px solid rgba(214, 229, 217, 0.12); }
   .active-card { border-color: rgba(244, 233, 138, 0.42); box-shadow: inset 0 0 0 1px rgba(244, 233, 138, 0.06); }
@@ -381,6 +427,27 @@
   .turn-heading { color: #f1e99d; }
   .card p { color: #a9b7ac; line-height: 1.45; }
   .card.muted { background: #111713; }
+
+  .initiative-reveal {
+    padding: 20px;
+    border: 1px solid rgba(244, 233, 138, 0.45);
+    border-radius: 18px;
+    background: #171e17;
+    box-shadow: 0 16px 50px rgba(0, 0, 0, 0.24), inset 0 0 0 1px rgba(244, 233, 138, 0.05);
+  }
+  .initiative-reveal-heading { display: flex; align-items: start; justify-content: space-between; gap: 18px; }
+  .initiative-reveal h2 { margin: 5px 0; font-size: 1.45rem; color: #f4edaa; }
+  .initiative-reveal p:not(.card-label) { margin: 0; color: #9eafa2; }
+  .initiative-winner { padding: 8px 12px; border-radius: 999px; background: rgba(244, 233, 138, 0.1); color: #f4edaa; white-space: nowrap; }
+  .initiative-rolls { list-style: none; margin: 16px 0 0; padding: 0; display: grid; gap: 8px; }
+  .initiative-rolls li { display: grid; grid-template-columns: 42px minmax(120px, 1fr) auto; align-items: center; gap: 12px; padding: 11px 12px; border-radius: 11px; background: #101713; border: 1px solid rgba(214, 229, 217, 0.08); }
+  .initiative-rolls li.first-place { border-color: rgba(244, 233, 138, 0.3); background: rgba(244, 233, 138, 0.07); }
+  .initiative-place { color: #829187; font-size: 0.78rem; font-weight: 800; }
+  .initiative-calculation { display: flex; align-items: center; justify-content: flex-end; gap: 8px; color: #a9b7ac; font-size: 0.82rem; }
+  .die-roll { min-width: 34px; height: 34px; display: inline-grid; place-items: center; border-radius: 8px; border: 1px solid rgba(214, 229, 217, 0.2); color: #edf2ed; font-size: 1rem; }
+  .initiative-total { min-width: 38px; color: #f4edaa; font-size: 1.15rem; text-align: center; }
+  .begin-battle { width: 100%; margin-top: 14px; padding: 11px 12px; border-radius: 10px; border: 1px solid rgba(244, 233, 138, 0.25); background: #313625; color: #f4edaa; cursor: pointer; font-weight: 750; }
+
   .turn-resources { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 12px 0; }
   .turn-resources span { display: grid; gap: 2px; padding: 8px 9px; border-radius: 9px; background: #101713; color: #829187; font-size: 0.72rem; }
   .turn-resources strong { color: #dce7de; font-size: 0.82rem; }
@@ -421,5 +488,9 @@
     .topbar { align-items: start; flex-direction: column; }
     .workspace { grid-template-columns: 1fr; }
     .sidebar { grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
+    .initiative-reveal-heading { flex-direction: column; }
+    .initiative-winner { white-space: normal; }
+    .initiative-rolls li { grid-template-columns: 36px 1fr; }
+    .initiative-calculation { grid-column: 1 / -1; justify-content: flex-start; padding-left: 48px; }
   }
 </style>
