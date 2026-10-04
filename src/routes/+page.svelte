@@ -4,13 +4,18 @@
   import {
     activeUnitId,
     combatUnit,
-    endTurn,
+    endTacticalTurn,
+    moveActiveUnit,
+    normalizeTacticalCombatState,
     phase4VerticalSliceCombat,
     resolveMoveAction,
-    updateBattleView,
-    type BattleView,
-    type CombatState,
+    startBattleWithInitiative,
+    undoActiveMovement,
+    type GridPoint,
+    type InitiativeEntry,
     type MoveActionFailureReason,
+    type TacticalCombatState,
+    type TacticalMovementResult,
     type UnitId
   } from '$lib/core';
   import {
@@ -24,14 +29,15 @@
     type BattlePersistenceHandle
   } from '$lib/persistence';
 
-  let combat: CombatState = phase4VerticalSliceCombat;
+  let combat: TacticalCombatState = normalizeTacticalCombatState(phase4VerticalSliceCombat);
   let targetId: UnitId | undefined = 'pokemon-pecrow-a';
-  let combatMessage = 'Move into range, choose a target, then use a move.';
+  let combatMessage = 'Initiative will be rolled when the battle starts.';
   let persistence: BattlePersistenceGateway | undefined;
   let persistenceHandle: BattlePersistenceHandle | undefined;
   let persistenceBusy = false;
   let persistenceMessage = 'Persistence is initializing.';
   let savedAt: string | undefined;
+  let showInitiativeReveal = false;
 
   $: activeId = activeUnitId(combat);
   $: active = combatUnit(combat, activeId);
@@ -46,23 +52,53 @@
 
   onMount(() => {
     const configuration = readLivePersistenceConfiguration();
-    if (!configuration) {
-      persistenceMessage = 'Persistence unavailable: configure PUBLIC_SUPABASE_URL and PUBLIC_SUPABASE_KEY.';
+    const storedHandle = configuration ? loadBattleHandle(window.localStorage) : null;
+
+    if (configuration) {
+      persistence = createLiveBattlePersistenceGateway(configuration);
+    }
+
+    if (persistence && storedHandle) {
+      void restoreSavedBattle(storedHandle, true);
       return;
     }
 
-    persistence = createLiveBattlePersistenceGateway(configuration);
-    const storedHandle = loadBattleHandle(window.localStorage);
-    if (!storedHandle) {
-      persistenceMessage = 'Ready to create a persistent battle save.';
-      return;
-    }
-
-    void restoreSavedBattle(storedHandle, true);
+    rollFreshInitiative();
+    persistenceMessage = configuration
+      ? 'Ready to create a persistent battle save.'
+      : 'Persistence unavailable: configure PUBLIC_SUPABASE_URL and PUBLIC_SUPABASE_KEY.';
   });
 
-  function handleBattleChange(battle: BattleView) {
-    combat = updateBattleView(combat, battle);
+  function rollFreshInitiative() {
+    combat = startBattleWithInitiative(phase4VerticalSliceCombat);
+    showInitiativeReveal = true;
+    combatMessage = `${unitName(activeUnitId(combat))} won initiative and acts first.`;
+  }
+
+  function requestMove(unitId: UnitId, destination: GridPoint): TacticalMovementResult {
+    const result = moveActiveUnit(combat, unitId, destination);
+    if (result.ok) {
+      combat = result.state;
+      combatMessage = `${unitName(unitId)} moved ${result.cost} square${result.cost === 1 ? '' : 's'} and has spent movement for this turn.`;
+    } else if (result.reason === 'movement-already-used') {
+      combatMessage = `${unitName(activeId)} has already spent movement this turn.`;
+    } else if (result.reason === 'not-active-turn') {
+      combatMessage = `It is ${unitName(activeId)}'s turn.`;
+    }
+    return result;
+  }
+
+  function undoMovement() {
+    const result = undoActiveMovement(combat);
+    if (!result.ok) {
+      combatMessage = result.reason === 'action-already-used'
+        ? 'Movement cannot be undone after the turn action has resolved.'
+        : 'There is no movement to undo.';
+      return;
+    }
+
+    combat = result.state;
+    combatMessage = `${unitName(activeId)} returned to the turn-start position. Movement is available again.`;
   }
 
   function useMove(moveId: string) {
@@ -75,7 +111,7 @@
       combatMessage = failureMessage(result.reason);
       return;
     }
-    combat = result.state;
+    combat = normalizeTacticalCombatState(result.state);
     const event = result.event;
     const targetName = combat.battle.units.find((unit) => unit.id === event.targetId)?.name ?? event.targetId;
     combatMessage = event.outcome === 'miss'
@@ -84,8 +120,8 @@
   }
 
   function nextTurn() {
-    combat = endTurn(combat);
-    combatMessage = `${unitName(activeUnitId(combat))}'s turn.`;
+    combat = endTacticalTurn(combat);
+    combatMessage = `${unitName(activeUnitId(combat))}'s turn. Movement and action are available.`;
   }
 
   async function saveBattle() {
@@ -129,11 +165,13 @@
         clearBattleHandle(window.localStorage);
         persistenceHandle = undefined;
         savedAt = undefined;
+        rollFreshInitiative();
         persistenceMessage = 'The saved battle no longer exists. A new save can be created.';
         return;
       }
 
-      combat = saved.state;
+      combat = normalizeTacticalCombatState(saved.state);
+      showInitiativeReveal = false;
       persistenceHandle = Object.freeze({
         id: saved.id,
         readKey: handle.readKey,
@@ -154,6 +192,16 @@
 
   function unitName(unitId: UnitId): string {
     return combat.battle.units.find((unit) => unit.id === unitId)?.name ?? unitId;
+  }
+
+  function initiativeText(entry: InitiativeEntry): string {
+    if (entry.naturalRoll == null || entry.total == null) return 'Existing saved turn order';
+    const modifier = entry.modifier >= 0 ? `+${entry.modifier}` : String(entry.modifier);
+    return `d20 ${entry.naturalRoll} ${modifier} = ${entry.total}`;
+  }
+
+  function initiativeModifierText(entry: InitiativeEntry): string {
+    return entry.modifier >= 0 ? `+${entry.modifier}` : String(entry.modifier);
   }
 
   function failureMessage(reason: MoveActionFailureReason): string {
@@ -187,42 +235,77 @@
 <div class="shell">
   <header class="topbar">
     <div>
-      <p class="eyebrow">Kornia Tactics · Phase 5</p>
+      <p class="eyebrow">Kornia Tactics · Phase 5 Playtest</p>
       <h1>{combat.battle.name}</h1>
-      <p class="lede">Persistent combat prototype with versioned snapshots, append-only battle events and reloadable HP, PP, turns and positions.</p>
+      <p class="lede">Initiative, turn-gated movement, automated combat and persistent battle saves.</p>
     </div>
-    <div class="badge">Round {combat.turn.round}</div>
+    <div class="badge">Round {combat.turn.round} · {unitName(activeId)}'s turn</div>
   </header>
 
   <main class="workspace">
     <section class="board-panel" aria-label="Battlefield">
-      <Battlefield battle={combat.battle} onBattleChange={handleBattleChange} />
+      {#if showInitiativeReveal}
+        <section class="initiative-reveal" aria-live="polite" aria-label="Initiative rolls">
+          <div class="initiative-reveal-heading">
+            <div>
+              <p class="card-label">Battle start</p>
+              <h2>Initiative Rolled</h2>
+              <p>Each combatant rolls d20 + DEX modifier. Highest total acts first.</p>
+            </div>
+            <strong class="initiative-winner">{unitName(activeId)} goes first</strong>
+          </div>
+
+          <ol class="initiative-rolls">
+            {#each combat.turn.initiative as entry, index}
+              <li class:first-place={index === 0}>
+                <span class="initiative-place">#{index + 1}</span>
+                <strong>{unitName(entry.unitId)}</strong>
+                {#if entry.naturalRoll != null && entry.total != null}
+                  <span class="initiative-calculation">
+                    <b class="die-roll">{entry.naturalRoll}</b>
+                    <span>DEX {initiativeModifierText(entry)}</span>
+                    <span>=</span>
+                    <b class="initiative-total">{entry.total}</b>
+                  </span>
+                {:else}
+                  <span class="initiative-calculation">Existing saved turn order</span>
+                {/if}
+              </li>
+            {/each}
+          </ol>
+
+          <button class="begin-battle" type="button" on:click={() => showInitiativeReveal = false}>
+            Begin battle
+          </button>
+        </section>
+      {/if}
+
+      <Battlefield
+        battle={combat.battle}
+        activeUnitId={activeId}
+        movementUsed={combat.turn.movementUsed}
+        onMoveRequest={requestMove}
+      />
     </section>
 
     <aside class="sidebar">
-      <section class="card persistence-card">
-        <p class="card-label">Persistence</p>
-        <h2>{persistenceHandle ? `Saved v${persistenceHandle.version}` : 'Unsaved battle'}</h2>
-        <p>{persistenceMessage}</p>
-        {#if savedAt}
-          <small>Last server snapshot: {formatSavedAt(savedAt)}</small>
-        {/if}
-        <div class="persistence-actions">
-          <button type="button" on:click={saveBattle} disabled={!persistence || persistenceBusy}>
-            {persistenceBusy ? 'Working…' : persistenceHandle ? 'Save battle' : 'Create save'}
-          </button>
-          {#if persistenceHandle}
-            <button type="button" on:click={reloadSavedBattle} disabled={persistenceBusy}>Reload saved</button>
-          {/if}
-        </div>
-        <small class="safety-note">The current vertical slice is Tactics-owned. Campaign Pokémon HP/PP are unchanged unless an owned Pokémon is explicitly bound later.</small>
-      </section>
-
       <section class="card active-card">
         <p class="card-label">Active turn</p>
-        <h2>{unitName(activeId)}</h2>
+        <h2 class="turn-heading">▶ {unitName(activeId)}'s Turn</h2>
         {#if active}
           <p>HP {active.currentHp}/{active.maxHp} · AC {active.armorClass}</p>
+          <div class="turn-resources">
+            <span>Movement <strong>{combat.turn.movementUsed ? 'Spent' : 'Available'}</strong></span>
+            <span>Action <strong>{combat.turn.actionUsed ? 'Spent' : 'Available'}</strong></span>
+          </div>
+          {#if combat.turn.movementUsed}
+            <button class="undo-move" type="button" on:click={undoMovement} disabled={combat.turn.actionUsed}>
+              Undo movement
+            </button>
+            {#if combat.turn.actionUsed}
+              <small class="undo-note">Movement locks once the turn action has resolved.</small>
+            {/if}
+          {/if}
           <label>
             <span>Target</span>
             <select bind:value={targetId}>
@@ -248,11 +331,44 @@
         <p class="message">{combatMessage}</p>
       </section>
 
+      <section class="card initiative-card">
+        <p class="card-label">Initiative</p>
+        <ol class="initiative-list">
+          {#each combat.turn.initiative as entry, index}
+            <li class:initiative-active={entry.unitId === activeId}>
+              <span>
+                <strong>{index + 1}. {unitName(entry.unitId)}</strong>
+                <small>{initiativeText(entry)}</small>
+              </span>
+              {#if entry.unitId === activeId}<em>NOW</em>{/if}
+            </li>
+          {/each}
+        </ol>
+      </section>
+
+      <section class="card persistence-card">
+        <p class="card-label">Persistence</p>
+        <h2>{persistenceHandle ? `Saved v${persistenceHandle.version}` : 'Unsaved battle'}</h2>
+        <p>{persistenceMessage}</p>
+        {#if savedAt}
+          <small>Last server snapshot: {formatSavedAt(savedAt)}</small>
+        {/if}
+        <div class="persistence-actions">
+          <button type="button" on:click={saveBattle} disabled={!persistence || persistenceBusy}>
+            {persistenceBusy ? 'Working…' : persistenceHandle ? 'Save battle' : 'Create save'}
+          </button>
+          {#if persistenceHandle}
+            <button type="button" on:click={reloadSavedBattle} disabled={persistenceBusy}>Reload saved</button>
+          {/if}
+        </div>
+        <small class="safety-note">The current vertical slice is Tactics-owned. Campaign Pokémon HP/PP are unchanged unless an owned Pokémon is explicitly bound later.</small>
+      </section>
+
       <section class="card">
         <p class="card-label">Combatants</p>
         <ul class="units">
           {#each combat.units as unit}
-            <li class:fainted={unit.currentHp <= 0}>
+            <li class:fainted={unit.currentHp <= 0} class:active-combatant={unit.unitId === activeId}>
               <span>{unitName(unit.unitId)}</span>
               <small>HP {unit.currentHp}/{unit.maxHp}</small>
             </li>
@@ -277,8 +393,8 @@
       </section>
 
       <section class="card muted">
-        <p class="card-label">Phase 5 scope</p>
-        <p>Save and reload the full local battle through Supabase. Events are append-only, snapshots are versioned, and concurrent stale saves are rejected. Multiplayer authority remains Phase 6.</p>
+        <p class="card-label">Playtest scope</p>
+        <p>Initiative rolls are shown prominently when a fresh battle begins and remain visible in the Initiative panel. Each unit may commit movement once per turn; movement can be undone before resolving the turn action. Combat calculations are otherwise unchanged.</p>
       </section>
     </aside>
   </main>
@@ -299,41 +415,82 @@
   h1 { margin: 2px 0 6px; font-size: clamp(1.8rem, 4vw, 3.2rem); line-height: 1; }
   .eyebrow, .card-label { margin: 0; color: #b7c9ba; text-transform: uppercase; letter-spacing: 0.14em; font-size: 0.72rem; font-weight: 750; }
   .lede { margin: 0; color: #9eb0a2; }
-  .badge { border: 1px solid rgba(223, 235, 225, 0.2); border-radius: 999px; padding: 10px 14px; color: #cbd8cd; white-space: nowrap; }
-  .workspace { max-width: 1380px; margin: 0 auto; display: grid; grid-template-columns: minmax(0, 1fr) 330px; gap: 18px; align-items: start; }
-  .board-panel { min-width: 0; }
+  .badge { border: 1px solid rgba(244, 233, 138, 0.32); border-radius: 999px; padding: 10px 14px; color: #efe8a5; white-space: nowrap; }
+  .workspace { max-width: 1380px; margin: 0 auto; display: grid; grid-template-columns: minmax(0, 1fr) 350px; gap: 18px; align-items: start; }
+  .board-panel { min-width: 0; display: grid; gap: 12px; }
   .sidebar { display: grid; gap: 12px; }
   .card { padding: 18px; border-radius: 16px; background: #151d17; border: 1px solid rgba(214, 229, 217, 0.12); }
-  .active-card { border-color: rgba(244, 233, 138, 0.26); }
+  .active-card { border-color: rgba(244, 233, 138, 0.42); box-shadow: inset 0 0 0 1px rgba(244, 233, 138, 0.06); }
+  .initiative-card { border-color: rgba(244, 233, 138, 0.2); }
   .persistence-card { border-color: rgba(127, 187, 245, 0.24); }
   .card h2 { margin: 6px 0; font-size: 1.15rem; }
+  .turn-heading { color: #f1e99d; }
   .card p { color: #a9b7ac; line-height: 1.45; }
   .card.muted { background: #111713; }
+
+  .initiative-reveal {
+    padding: 20px;
+    border: 1px solid rgba(244, 233, 138, 0.45);
+    border-radius: 18px;
+    background: #171e17;
+    box-shadow: 0 16px 50px rgba(0, 0, 0, 0.24), inset 0 0 0 1px rgba(244, 233, 138, 0.05);
+  }
+  .initiative-reveal-heading { display: flex; align-items: start; justify-content: space-between; gap: 18px; }
+  .initiative-reveal h2 { margin: 5px 0; font-size: 1.45rem; color: #f4edaa; }
+  .initiative-reveal p:not(.card-label) { margin: 0; color: #9eafa2; }
+  .initiative-winner { padding: 8px 12px; border-radius: 999px; background: rgba(244, 233, 138, 0.1); color: #f4edaa; white-space: nowrap; }
+  .initiative-rolls { list-style: none; margin: 16px 0 0; padding: 0; display: grid; gap: 8px; }
+  .initiative-rolls li { display: grid; grid-template-columns: 42px minmax(120px, 1fr) auto; align-items: center; gap: 12px; padding: 11px 12px; border-radius: 11px; background: #101713; border: 1px solid rgba(214, 229, 217, 0.08); }
+  .initiative-rolls li.first-place { border-color: rgba(244, 233, 138, 0.3); background: rgba(244, 233, 138, 0.07); }
+  .initiative-place { color: #829187; font-size: 0.78rem; font-weight: 800; }
+  .initiative-calculation { display: flex; align-items: center; justify-content: flex-end; gap: 8px; color: #a9b7ac; font-size: 0.82rem; }
+  .die-roll { min-width: 34px; height: 34px; display: inline-grid; place-items: center; border-radius: 8px; border: 1px solid rgba(214, 229, 217, 0.2); color: #edf2ed; font-size: 1rem; }
+  .initiative-total { min-width: 38px; color: #f4edaa; font-size: 1.15rem; text-align: center; }
+  .begin-battle { width: 100%; margin-top: 14px; padding: 11px 12px; border-radius: 10px; border: 1px solid rgba(244, 233, 138, 0.25); background: #313625; color: #f4edaa; cursor: pointer; font-weight: 750; }
+
+  .turn-resources { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 12px 0; }
+  .turn-resources span { display: grid; gap: 2px; padding: 8px 9px; border-radius: 9px; background: #101713; color: #829187; font-size: 0.72rem; }
+  .turn-resources strong { color: #dce7de; font-size: 0.82rem; }
   label { display: grid; gap: 5px; margin: 14px 0; color: #b7c9ba; font-size: 0.8rem; }
   select { width: 100%; padding: 9px 10px; border-radius: 9px; border: 1px solid rgba(214, 229, 217, 0.18); background: #0f1511; color: #edf2ed; }
   .moves { display: grid; gap: 8px; }
-  .moves button, .end-turn, .persistence-actions button { width: 100%; border: 1px solid rgba(214, 229, 217, 0.15); border-radius: 10px; padding: 10px 11px; background: #202b22; color: #edf2ed; text-align: left; cursor: pointer; }
+  .moves button, .end-turn, .undo-move, .persistence-actions button { width: 100%; border: 1px solid rgba(214, 229, 217, 0.15); border-radius: 10px; padding: 10px 11px; background: #202b22; color: #edf2ed; text-align: left; cursor: pointer; }
   .moves button { display: grid; gap: 3px; }
-  .moves button:disabled, .persistence-actions button:disabled { cursor: not-allowed; opacity: 0.45; }
+  .moves button:disabled, .undo-move:disabled, .persistence-actions button:disabled { cursor: not-allowed; opacity: 0.45; }
   .moves small { color: #9eafa2; }
+  .undo-move { margin: 2px 0 0; text-align: center; background: #2a2d25; }
+  .undo-note { display: block; margin-top: 6px; line-height: 1.35; }
   .end-turn { margin-top: 10px; text-align: center; background: #2b342b; }
   .message { margin: 12px 0 0 !important; font-size: 0.86rem; }
+  .initiative-list { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 6px; }
+  .initiative-list li { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 9px; border-radius: 9px; background: #101713; }
+  .initiative-list li span { display: grid; gap: 2px; }
+  .initiative-list strong { color: #dce7de; font-size: 0.84rem; }
+  .initiative-list small { font-size: 0.72rem; }
+  .initiative-list em { color: #f1e99d; font-size: 0.68rem; font-style: normal; font-weight: 800; letter-spacing: 0.08em; }
+  .initiative-list .initiative-active { background: rgba(244, 233, 138, 0.08); border: 1px solid rgba(244, 233, 138, 0.2); }
   .persistence-actions { margin-top: 12px; display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
   .persistence-actions button { text-align: center; }
   .persistence-actions button:first-child { background: #20302a; }
   .safety-note { display: block; margin-top: 10px; line-height: 1.4; }
   .units { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 7px; }
-  .units li { display: flex; justify-content: space-between; gap: 12px; }
+  .units li { display: flex; justify-content: space-between; gap: 12px; padding: 4px 0; }
+  .units .active-combatant { color: #f1e99d; font-weight: 700; }
   .units .fainted { opacity: 0.45; text-decoration: line-through; }
   small { color: #829187; }
-  ol { margin: 10px 0 0; padding-left: 20px; display: grid; gap: 9px; }
-  ol li { color: #9eafa2; font-size: 0.8rem; }
-  ol strong, ol span { display: block; }
-  ol strong { color: #dce7de; margin-bottom: 2px; }
+  .log-card ol { margin: 10px 0 0; padding-left: 20px; display: grid; gap: 9px; }
+  .log-card ol li { color: #9eafa2; font-size: 0.8rem; }
+  .log-card ol strong, .log-card ol span { display: block; }
+  .log-card ol strong { color: #dce7de; margin-bottom: 2px; }
 
   @media (max-width: 960px) {
     .shell { padding: 18px; }
+    .topbar { align-items: start; flex-direction: column; }
     .workspace { grid-template-columns: 1fr; }
     .sidebar { grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
+    .initiative-reveal-heading { flex-direction: column; }
+    .initiative-winner { white-space: normal; }
+    .initiative-rolls li { grid-template-columns: 36px 1fr; }
+    .initiative-calculation { grid-column: 1 / -1; justify-content: flex-start; padding-left: 48px; }
   }
 </style>

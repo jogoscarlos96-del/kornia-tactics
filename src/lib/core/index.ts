@@ -5,4 +5,5 @@ export * from './model';
 export * from './movement';
 export * from './pathfinding';
 export * from './species';
+export * from './turnFlow';
 export * from './verticalSlice';
